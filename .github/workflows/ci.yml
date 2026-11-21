@@ -1,0 +1,77 @@
+name: GenVM CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: freelance-escrow
+            contract: contracts/freelance_escrow.py
+          - name: prediction-market
+            contract: contracts/prediction_market.py
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install GenVM tooling
+        run: pip install -r requirements.txt
+
+      - name: Cache GenVM SDK artifacts
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/genvm-linter
+          key: genvm-linter-${{ matrix.name }}-${{ hashFiles('contracts/*.py') }}
+
+      - name: Lint and validate contract
+        run: genvm-lint check ${{ matrix.contract }}
+
+      - name: Extract ABI schema
+        run: |
+          mkdir -p abi
+          genvm-lint schema ${{ matrix.contract }} --output "abi/${{ matrix.name }}.json"
+
+      - name: Upload ABI
+        uses: actions/upload-artifact@v4
+        with:
+          name: abi-${{ matrix.name }}
+          path: abi/
+
+  test:
+    name: Direct mode tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install GenVM tooling
+        run: pip install -r requirements.txt
+
+      - name: Cache downloaded GenVM SDK
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/gltest-direct
+          key: gltest-direct-${{ hashFiles('contracts/*.py') }}
+
+      - name: Run direct mode tests
+        run: pytest tests/direct -v --tb=short
