@@ -8,7 +8,7 @@ Intelligent Contract: **web access**, **LLM sebagai pengambil keputusan**, dan
 
 | File | Inti ide |
 |---|---|
-| `contracts/freelance_escrow.py` | Escrow pekerjaan freelance per milestone: AI menilai apakah hasil kerja memenuhi kriteria, lalu dana dirilis otomatis |
+| `contracts/freelance_escrow.py` | Escrow pekerjaan freelance per milestone: AI menilai apakah hasil kerja memenuhi kriteria, lalu dananya dikreditkan ke freelancer |
 | `contracts/prediction_market.py` | Prediction market biner yang hasilnya diselesaikan dengan membaca halaman sumber di web, bukan oleh admin |
 
 Keduanya memakai header `Depends` yang sama:
