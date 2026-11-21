@@ -1,5 +1,7 @@
 # Dua Intelligent Contract untuk GenLayer
 
+[![GenVM CI](https://github.com/rizqhika29/genlayer-contracts/actions/workflows/ci.yml/badge.svg)](https://github.com/rizqhika29/genlayer-contracts/actions/workflows/ci.yml)
+
 Dua kontrak Python untuk GenVM (GenLayer) yang memakai tiga kekuatan utama
 Intelligent Contract: **web access**, **LLM sebagai pengambil keputusan**, dan
 **konsensus validator lewat equivalence principle**.
