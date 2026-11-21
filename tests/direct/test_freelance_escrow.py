@@ -188,7 +188,8 @@ def test_three_rejections_mark_the_milestone_failed(
     assert contract.get_milestone_attempts_left(0) == 0
     assert contract.get_my_owed() == 0
 
-    with direct_vm.expect_revert("no submission attempts left"):
+    # A failed milestone leaves the submission window entirely.
+    with direct_vm.expect_revert("milestone is not open for a submission"):
         submit(contract)
 
 
