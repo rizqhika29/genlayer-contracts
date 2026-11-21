@@ -213,7 +213,7 @@ def test_resolve_yes_and_payout_preview(
     # Alice risked 3 of the 4 GEN pool, so she takes the whole pool.
     assert contract.preview_payout(0, to_hex(direct_alice)) == 4 * GEN
     assert contract.preview_payout(0, to_hex(direct_bob)) == 0
-    assert contract.has_claimed(0) is False
+    assert not contract.has_claimed(0)
     assert contract.get_my_owed() == 0
 
 
@@ -235,7 +235,7 @@ def test_claim_credits_the_winner(
     direct_vm.sender = direct_alice
     assert contract.claim(0) == 4 * GEN
     assert contract.get_my_owed() == 4 * GEN
-    assert contract.has_claimed(0) is True
+    assert contract.has_claimed(0)
 
     with direct_vm.expect_revert("you already claimed"):
         contract.claim(0)
@@ -244,7 +244,7 @@ def test_claim_credits_the_winner(
     direct_vm.sender = direct_bob
     assert contract.claim(0) == 0
     assert contract.get_my_owed() == 0
-    assert contract.has_claimed(0) is True
+    assert contract.has_claimed(0)
 
 
 def test_claim_before_resolution_reverts(

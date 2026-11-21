@@ -35,8 +35,10 @@ jobs:
       - name: Cache GenVM SDK artifacts
         uses: actions/cache@v4
         with:
+          # The SDK version comes from the contract's Depends header, not from
+          # the contract code, so a stable key is enough.
           path: ~/.cache/genvm-linter
-          key: genvm-linter-${{ matrix.name }}-${{ hashFiles('contracts/*.py') }}
+          key: genvm-linter-${{ matrix.name }}-v1
 
       - name: Lint and validate contract
         run: genvm-lint check ${{ matrix.contract }}
@@ -71,7 +73,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/gltest-direct
-          key: gltest-direct-${{ hashFiles('contracts/*.py') }}
+          key: gltest-direct-sdk-v1
 
       - name: Run direct mode tests
         run: pytest tests/direct -v --tb=short
