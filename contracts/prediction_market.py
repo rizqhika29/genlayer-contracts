@@ -20,6 +20,8 @@ Payout rule
   it keeps the arithmetic identical on every node.
 - An `invalid` outcome (sources unusable, or the creator voided the market)
   refunds every stake in full.
+- `claim` credits the payout inside the contract and `withdraw` sends the GEN
+  out. Pull payments keep a failed transfer from locking the market.
 - Nobody staked on the winning side is impossible in practice, but the contract
   refunds instead of dividing by zero just in case.
 
@@ -198,6 +200,7 @@ class PredictionMarket(gl.Contract):
 
     markets: TreeMap[str, Market]
     stakes: TreeMap[str, Stake]      # key: "<market_id>|<bettor address>"
+    owed: TreeMap[Address, u256]
 
     def __init__(self):
         self.market_count = u32(0)
@@ -260,8 +263,13 @@ class PredictionMarket(gl.Contract):
         if stake.side != "" and stake.side != side:
             raise gl.vm.UserError(ERROR_EXPECTED + " you already staked on the other side")
 
-        self.stakes[stake_key].side = side
-        self.stakes[stake_key].amount = stake.amount + value
+        # A missing key cannot be written field by field, so store the whole
+        # record instead of mutating it in place.
+        self.stakes[stake_key] = Stake(
+            side=side,
+            amount=stake.amount + value,
+            claimed=stake.claimed,
+        )
 
         if side == "yes":
             self.markets[key].yes_pool = market.yes_pool + value
@@ -377,14 +385,27 @@ class PredictionMarket(gl.Contract):
         else:
             payout = u256(0)
 
-        self.stakes[stake_key].claimed = True
+        self.stakes[stake_key] = Stake(side=stake.side, amount=stake.amount, claimed=True)
         if payout == u256(0):
             return u256(0)
-        if payout > self.balance:
-            raise gl.vm.UserError(ERROR_EXPECTED + " market balance cannot cover this payout")
 
-        _Recipient(sender).emit_transfer(value=payout)
+        # Pull payment: credit the balance, the bettor withdraws it later.
+        self.owed[sender] = self.owed.get(sender, u256(0)) + payout
         return u256(payout)
+
+    @gl.public.write
+    def withdraw(self) -> u256:
+        """Send the caller everything the market owes them."""
+        sender = gl.message.sender_address
+        owed = self.owed.get(sender, u256(0))
+        if owed == u256(0):
+            raise gl.vm.UserError(ERROR_EXPECTED + " nothing to withdraw")
+        if owed > self.balance:
+            raise gl.vm.UserError(ERROR_EXPECTED + " market balance cannot cover this withdrawal")
+
+        self.owed[sender] = u256(0)
+        _Recipient(sender).emit_transfer(value=owed)
+        return owed
 
     # -- read-only ---------------------------------------------------------
 
@@ -432,6 +453,14 @@ class PredictionMarket(gl.Contract):
     @gl.public.view
     def get_balance(self) -> u256:
         return self.balance
+
+    @gl.public.view
+    def get_my_owed(self) -> u256:
+        return self.owed.get(gl.message.sender_address, u256(0))
+
+    @gl.public.view
+    def get_owed(self, who: str) -> u256:
+        return self.owed.get(Address(who), u256(0))
 
     @gl.public.view
     def get_my_stake(self, market_id: u32) -> u256:

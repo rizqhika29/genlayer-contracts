@@ -29,9 +29,13 @@ Keduanya memakai header `Depends` yang sama:
    sebesar `amount` (metode `payable`).
 4. Freelancer mengirim tautan hasil kerja lewat `submit_deliverable(index, url, note)`.
 5. Klien atau freelancer memanggil `judge_milestone(index)`.
-6. Approve → dana milestone dikirim ke freelancer. Reject → freelancer boleh
-   revisi (maksimal 3 percobaan). Setelah percobaan terakhir gagal, klien
-   memakai `refund_milestone(index)` untuk menarik dananya kembali.
+6. Approve → nominal milestone dikreditkan ke saldo freelancer di dalam kontrak.
+   Reject → freelancer boleh revisi (maksimal 3 percobaan); setelah percobaan
+   terakhir gagal, klien memakai `refund_milestone(index)` untuk mengkreditkan
+   dananya kembali ke dirinya.
+7. Penerima memanggil `withdraw()` untuk menarik saldo GEN-nya. Pembayaran
+   bersifat *pull*: transfer yang gagal bisa diulang dan escrow tidak pernah
+   tertinggal dalam keadaan setengah jadi.
 
 ### Bagaimana konsensusnya bekerja
 
@@ -69,11 +73,14 @@ Tulis (`write`):
 - `judge_milestone(index: u32) -> str` — hanya klien/freelancer; hasil
   `"approved"`, `"revision_required"`, atau `"failed"`.
 - `refund_milestone(index: u32) -> None` — hanya klien, hanya untuk milestone `failed`.
+- `withdraw() -> u256` — mengirim seluruh saldo GEN yang menjadi hak pemanggil
+  (klien atau freelancer).
 
 Baca (`view`):
 
 - `get_client()`, `get_freelancer()`, `get_job_title()`, `get_job_spec()`
-- `get_funded_total()`, `get_released_total()`, `get_balance()`
+- `get_funded_total()`, `get_released_total()`, `get_withdrawn_total()`, `get_balance()`
+- `get_my_owed()`, `get_owed(who)` — saldo yang siap ditarik
 - `get_milestone_count()`
 - `get_milestone_title/criteria/amount/state/deliverable_url/note/attempts/score/reason(index)`
 - `get_milestone_attempts_left(index)`
@@ -93,7 +100,8 @@ State milestone: `draft` → `funded` → `submitted` → (`approved` | `revisio
 3. Setelah peristiwa terjadi, siapa pun memanggil `resolve(market_id)`. Kontrak
    mengambil halaman sumber, meminta LLM memutuskan `yes` / `no` / `invalid`, dan
    validator mengulang blok yang sama.
-4. Pemenang menarik bagiannya dengan `claim(market_id)`.
+4. Pemenang memanggil `claim(market_id)` — payout dikreditkan ke saldo mereka di
+   dalam kontrak — lalu `withdraw()` untuk mengirim GEN-nya.
 
 ### Rumus pembayaran
 
@@ -131,7 +139,8 @@ Tulis (`write`):
 - `stake_no(market_id: u32) -> None` — payable
 - `resolve(market_id: u32) -> str` — `"yes"`, `"no"`, atau `"invalid"`
 - `void_market(market_id: u32) -> None` — hanya pencipta, hanya saat pasar terbuka
-- `claim(market_id: u32) -> u256` — payout yang dikirim
+- `claim(market_id: u32) -> u256` — mengkreditkan payout ke saldo pemanggil
+- `withdraw() -> u256` — mengirim saldo GEN yang menjadi hak pemanggil
 
 Baca (`view`):
 
@@ -139,6 +148,7 @@ Baca (`view`):
 - `get_question/criteria/sources/creator/outcome/resolution_reason(id)`
 - `get_yes_pool(id)`, `get_no_pool(id)`, `get_total_pool(id)`
 - `get_my_stake(id)`, `get_my_side(id)`, `has_claimed(id)`
+- `get_my_owed()`, `get_owed(who)` — saldo siap tarik
 - `get_stake(id, bettor)`, `preview_payout(id, bettor)`
 
 ---
@@ -213,6 +223,8 @@ SDK GenVM tidak diulang di setiap run.
   kontrak ke halaman statis, API JSON, atau raw file.
 - Pengiriman GEN ke EOA memakai `@gl.evm.contract_interface` + `emit_transfer`, jadi
   dana terpotong saat pesan dibuat dan dikreditkan ke penerima ketika final.
+  Kedua kontrak memakai pola *pull*: `judge_milestone`/`refund_milestone`/`claim`
+  hanya mencatat saldo, dan `withdraw()` yang mengirim GEN.
 - Nilai dikirim dalam wei (1 GEN = 10^18 wei). `10 ** 16` = 0,01 GEN.
 - Perubahan kode tidak mengubah kontrak yang sudah ter-deploy: deploy ulang
   menghasilkan alamat dan state baru.

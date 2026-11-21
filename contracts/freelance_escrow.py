@@ -20,9 +20,13 @@ Flow
    block. The verdict must match exactly and the LLM score must be within
    SCORE_TOLERANCE points, otherwise the leader is rejected and the network
    rotates to another leader.
-5. On approval the escrowed GEN is released to the freelancer. On rejection the
-   freelancer may resubmit, up to MAX_ATTEMPTS. After the final rejection the
-   client takes the money back with `refund_milestone`.
+5. On approval the milestone amount is credited to the freelancer inside the
+   contract. On rejection the freelancer may resubmit, up to MAX_ATTEMPTS.
+   After the final rejection the client takes the money back with
+   `refund_milestone`.
+6. Whoever is owed GEN calls `withdraw()` to receive it. Payouts are pulled
+   instead of pushed, so a failing transfer can simply be retried and never
+   leaves the escrow half settled.
 
 Consensus notes
 ---------------
@@ -197,24 +201,29 @@ class FreelanceEscrow(gl.Contract):
     job_spec: str
     funded_total: u256
     released_total: u256
+    withdrawn_total: u256
     milestone_count: u32
 
     milestones: TreeMap[str, Milestone]
+    owed: TreeMap[Address, u256]
 
-    def __init__(self, job_title: str, job_spec: str, freelancer: Address):
+    def __init__(self, job_title: str, job_spec: str, freelancer: str):
         if not job_title.strip():
             raise gl.vm.UserError(ERROR_EXPECTED + " job title is required")
         if not job_spec.strip():
             raise gl.vm.UserError(ERROR_EXPECTED + " job brief is required")
-        if freelancer == gl.message.sender_address:
+
+        freelancer_address = Address(freelancer)
+        if freelancer_address == gl.message.sender_address:
             raise gl.vm.UserError(ERROR_EXPECTED + " client and freelancer must be different accounts")
 
         self.client = gl.message.sender_address
-        self.freelancer = freelancer
+        self.freelancer = freelancer_address
         self.job_title = job_title.strip()
         self.job_spec = job_spec.strip()
         self.funded_total = u256(0)
         self.released_total = u256(0)
+        self.withdrawn_total = u256(0)
         self.milestone_count = u32(0)
 
     # -- setup -------------------------------------------------------------
@@ -354,11 +363,11 @@ class FreelanceEscrow(gl.Contract):
         self.milestones[key].reason = reason
 
         if verdict == "approve":
-            if amount > self.balance:
-                raise gl.vm.UserError(ERROR_EXPECTED + " escrow balance cannot cover this milestone")
             self.milestones[key].state = "approved"
             self.released_total = self.released_total + amount
-            _Recipient(self.freelancer).emit_transfer(value=amount)
+            # Pull payment: the money is credited here and leaves the contract
+            # when the freelancer calls withdraw().
+            self.owed[self.freelancer] = self.owed.get(self.freelancer, u256(0)) + amount
             return "approved"
 
         if attempts >= MAX_ATTEMPTS:
@@ -379,11 +388,24 @@ class FreelanceEscrow(gl.Contract):
             raise gl.vm.UserError(ERROR_EXPECTED + " unknown milestone")
         if milestone.state != "failed":
             raise gl.vm.UserError(ERROR_EXPECTED + " only a failed milestone can be refunded")
-        if milestone.amount > self.balance:
-            raise gl.vm.UserError(ERROR_EXPECTED + " escrow balance cannot cover this refund")
 
         self.milestones[key].state = "refunded"
-        _Recipient(self.client).emit_transfer(value=milestone.amount)
+        self.owed[self.client] = self.owed.get(self.client, u256(0)) + milestone.amount
+
+    @gl.public.write
+    def withdraw(self) -> u256:
+        """Send the caller everything the escrow owes them (client or freelancer)."""
+        sender = gl.message.sender_address
+        owed = self.owed.get(sender, u256(0))
+        if owed == u256(0):
+            raise gl.vm.UserError(ERROR_EXPECTED + " nothing to withdraw")
+        if owed > self.balance:
+            raise gl.vm.UserError(ERROR_EXPECTED + " escrow balance cannot cover this withdrawal")
+
+        self.owed[sender] = u256(0)
+        self.withdrawn_total = self.withdrawn_total + owed
+        _Recipient(sender).emit_transfer(value=owed)
+        return owed
 
     # -- read-only ---------------------------------------------------------
 
@@ -414,6 +436,18 @@ class FreelanceEscrow(gl.Contract):
     @gl.public.view
     def get_balance(self) -> u256:
         return self.balance
+
+    @gl.public.view
+    def get_withdrawn_total(self) -> u256:
+        return self.withdrawn_total
+
+    @gl.public.view
+    def get_my_owed(self) -> u256:
+        return self.owed.get(gl.message.sender_address, u256(0))
+
+    @gl.public.view
+    def get_owed(self, who: str) -> u256:
+        return self.owed.get(Address(who), u256(0))
 
     @gl.public.view
     def get_milestone_count(self) -> u32:

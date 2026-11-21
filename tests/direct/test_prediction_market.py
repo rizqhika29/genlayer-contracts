@@ -3,7 +3,13 @@
 Every web page and LLM answer is mocked, so the tests exercise the
 deterministic contract logic plus the leader/validator comparison without
 touching the network.
+
+Payouts are pulled: ``claim`` credits a balance inside the contract and
+``withdraw`` sends the GEN out. Direct mode has no chain layer, so that last
+hop is skipped.
 """
+
+import pytest
 
 from tests.direct.conftest import to_hex
 
@@ -120,6 +126,20 @@ def test_stake_pools_and_side(direct_vm, direct_deploy, direct_alice, direct_bob
     assert contract.get_total_pool(0) == 4 * GEN
 
 
+def test_second_stake_on_the_same_side_adds_up(
+    direct_vm, direct_deploy, direct_alice
+):
+    direct_vm.sender = direct_alice
+    contract = direct_deploy(CONTRACT)
+    create_market(contract)
+
+    stake(direct_vm, contract, "yes", GEN)
+    stake(direct_vm, contract, "yes", 2 * GEN)
+
+    assert contract.get_my_stake(0) == 3 * GEN
+    assert contract.get_yes_pool(0) == 3 * GEN
+
+
 def test_cannot_stake_on_both_sides(direct_vm, direct_deploy, direct_alice):
     direct_vm.sender = direct_alice
     contract = direct_deploy(CONTRACT)
@@ -141,6 +161,21 @@ def test_stake_below_minimum_reverts(direct_vm, direct_deploy, direct_alice):
     direct_vm.value = GEN // 200
     with direct_vm.expect_revert("stake is below the minimum"):
         contract.stake_yes(0)
+    direct_vm.value = 0
+
+
+def test_cannot_stake_after_resolution(direct_vm, direct_deploy, direct_alice):
+    direct_vm.sender = direct_alice
+    contract = direct_deploy(CONTRACT)
+    create_market(contract)
+    stake(direct_vm, contract, "yes", GEN)
+
+    mock_resolution(direct_vm, YES_ANSWER)
+    contract.resolve(0)
+
+    direct_vm.value = GEN
+    with direct_vm.expect_revert("market is already resolved"):
+        contract.stake_no(0)
     direct_vm.value = 0
 
 
@@ -179,6 +214,49 @@ def test_resolve_yes_and_payout_preview(
     assert contract.preview_payout(0, to_hex(direct_alice)) == 4 * GEN
     assert contract.preview_payout(0, to_hex(direct_bob)) == 0
     assert contract.has_claimed(0) is False
+    assert contract.get_my_owed() == 0
+
+
+def test_claim_credits_the_winner(
+    direct_vm, direct_deploy, direct_alice, direct_bob
+):
+    direct_vm.sender = direct_alice
+    contract = direct_deploy(CONTRACT)
+    create_market(contract)
+
+    stake(direct_vm, contract, "yes", 3 * GEN)
+
+    direct_vm.sender = direct_bob
+    stake(direct_vm, contract, "no", GEN)
+
+    mock_resolution(direct_vm, YES_ANSWER)
+    contract.resolve(0)
+
+    direct_vm.sender = direct_alice
+    assert contract.claim(0) == 4 * GEN
+    assert contract.get_my_owed() == 4 * GEN
+    assert contract.has_claimed(0) is True
+
+    with direct_vm.expect_revert("you already claimed"):
+        contract.claim(0)
+
+    # The losing side claims nothing but is marked as settled.
+    direct_vm.sender = direct_bob
+    assert contract.claim(0) == 0
+    assert contract.get_my_owed() == 0
+    assert contract.has_claimed(0) is True
+
+
+def test_claim_before_resolution_reverts(
+    direct_vm, direct_deploy, direct_alice
+):
+    direct_vm.sender = direct_alice
+    contract = direct_deploy(CONTRACT)
+    create_market(contract)
+    stake(direct_vm, contract, "yes", GEN)
+
+    with direct_vm.expect_revert("market is not resolved yet"):
+        contract.claim(0)
 
 
 def test_resolve_is_rejected_when_validator_disagrees(
@@ -198,6 +276,20 @@ def test_resolve_is_rejected_when_validator_disagrees(
     mock_resolution(direct_vm, NO_ANSWER)
 
     assert direct_vm.run_validator() is False
+
+
+def test_validator_agrees_with_identical_mocks(
+    direct_vm, direct_deploy, direct_alice
+):
+    direct_vm.sender = direct_alice
+    contract = direct_deploy(CONTRACT)
+    create_market(contract)
+    stake(direct_vm, contract, "yes", GEN)
+
+    mock_resolution(direct_vm, YES_ANSWER)
+    contract.resolve(0)
+
+    assert direct_vm.run_validator() is True
 
 
 def test_void_market_refunds_every_stake(
@@ -242,3 +334,30 @@ def test_resolve_twice_reverts(direct_vm, direct_deploy, direct_alice):
 
     with direct_vm.expect_revert("market is already resolved"):
         contract.resolve(0)
+
+
+def test_withdraw_without_a_balance_reverts(
+    direct_vm, direct_deploy, direct_alice
+):
+    direct_vm.sender = direct_alice
+    contract = direct_deploy(CONTRACT)
+
+    with direct_vm.expect_revert("nothing to withdraw"):
+        contract.withdraw()
+
+
+@pytest.mark.skip(
+    reason="direct mode has no chain layer: balances and external messages are "
+    "not emulated, so the transfer hop can only be checked on Studio or testnet"
+)
+def test_withdraw_sends_gen(direct_vm, direct_deploy, direct_alice):  # pragma: no cover
+    direct_vm.sender = direct_alice
+    contract = direct_deploy(CONTRACT)
+    create_market(contract)
+    stake(direct_vm, contract, "yes", GEN)
+
+    mock_resolution(direct_vm, YES_ANSWER)
+    contract.resolve(0)
+    contract.claim(0)
+
+    assert contract.withdraw() == GEN

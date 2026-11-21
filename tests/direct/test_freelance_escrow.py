@@ -2,7 +2,13 @@
 
 Web pages and LLM verdicts are mocked. The tests cover the milestone state
 machine, the access rules, and the leader/validator comparison.
+
+Payouts are pulled: ``judge_milestone``/``refund_milestone`` credit a balance
+inside the contract and ``withdraw`` sends the GEN out. Direct mode has no chain
+layer, so that last hop is skipped.
 """
+
+import pytest
 
 from tests.direct.conftest import to_hex
 
@@ -75,6 +81,7 @@ def test_deploy_stores_job_details(direct_vm, direct_deploy, direct_alice):
     assert to_hex(contract.get_freelancer()) == FREELANCER
     assert contract.get_milestone_count() == 0
     assert contract.get_funded_total() == 0
+    assert contract.get_withdrawn_total() == 0
 
 
 def test_add_milestone_starts_in_draft(direct_vm, direct_deploy, direct_alice):
@@ -179,12 +186,13 @@ def test_three_rejections_mark_the_milestone_failed(
     assert contract.get_milestone_state(0) == "failed"
     assert contract.get_milestone_attempts(0) == 3
     assert contract.get_milestone_attempts_left(0) == 0
+    assert contract.get_my_owed() == 0
 
     with direct_vm.expect_revert("no submission attempts left"):
         submit(contract)
 
 
-def test_judge_approves_and_releases_the_milestone(
+def test_judge_approves_and_credits_the_freelancer(
     direct_vm, direct_deploy, direct_alice
 ):
     contract = deploy_escrow(direct_vm, direct_deploy, direct_alice)
@@ -199,9 +207,68 @@ def test_judge_approves_and_releases_the_milestone(
 
     assert verdict == "approved"
     assert contract.get_milestone_state(0) == "approved"
-    assert contract.get_released_total() == GEN
     assert contract.get_milestone_score(0) == 92
+    assert contract.get_released_total() == GEN
+    # The freelancer now has a claim on the escrow, not a transfer yet.
+    assert contract.get_owed(FREELANCER) == GEN
+    assert contract.get_withdrawn_total() == 0
 
+
+def test_client_refunds_a_failed_milestone(direct_vm, direct_deploy, direct_alice):
+    contract = deploy_escrow(direct_vm, direct_deploy, direct_alice)
+    add_and_fund(contract, direct_vm)
+
+    act_as_freelancer(direct_vm)
+    mock_judgement(direct_vm, REJECT_ANSWER)
+    for _ in range(3):
+        submit(contract)
+        contract.judge_milestone(0)
+
+    direct_vm.sender = direct_alice
+    contract.refund_milestone(0)
+
+    assert contract.get_milestone_state(0) == "refunded"
+    assert contract.get_owed(to_hex(direct_alice)) == GEN
+
+
+def test_refund_requires_a_failed_milestone(
+    direct_vm, direct_deploy, direct_alice
+):
+    contract = deploy_escrow(direct_vm, direct_deploy, direct_alice)
+    add_and_fund(contract, direct_vm)
+
+    with direct_vm.expect_revert("only a failed milestone can be refunded"):
+        contract.refund_milestone(0)
+
+
+def test_withdraw_without_a_balance_reverts(
+    direct_vm, direct_deploy, direct_alice
+):
+    contract = deploy_escrow(direct_vm, direct_deploy, direct_alice)
+
+    with direct_vm.expect_revert("nothing to withdraw"):
+        contract.withdraw()
+
+
+@pytest.mark.skip(
+    reason="direct mode has no chain layer: balances and external messages are "
+    "not emulated, so the transfer hop can only be checked on Studio or testnet"
+)
+def test_withdraw_sends_gen(direct_vm, direct_deploy, direct_alice):  # pragma: no cover
+    contract = deploy_escrow(direct_vm, direct_deploy, direct_alice)
+    add_and_fund(contract, direct_vm)
+
+    act_as_freelancer(direct_vm)
+    submit(contract)
+    mock_judgement(direct_vm, APPROVE_ANSWER)
+    contract.judge_milestone(0)
+
+    assert contract.withdraw() == GEN
+
+
+# ---------------------------------------------------------------------------
+# Consensus
+# ---------------------------------------------------------------------------
 
 def test_validator_disagrees_when_verdict_differs(
     direct_vm, direct_deploy, direct_alice
@@ -220,6 +287,21 @@ def test_validator_disagrees_when_verdict_differs(
     mock_judgement(direct_vm, APPROVE_ANSWER)
 
     assert direct_vm.run_validator() is False
+
+
+def test_validator_agrees_with_identical_mocks(
+    direct_vm, direct_deploy, direct_alice
+):
+    contract = deploy_escrow(direct_vm, direct_deploy, direct_alice)
+    add_and_fund(contract, direct_vm)
+
+    act_as_freelancer(direct_vm)
+    submit(contract)
+
+    mock_judgement(direct_vm, APPROVE_ANSWER)
+    contract.judge_milestone(0)
+
+    assert direct_vm.run_validator() is True
 
 
 def test_outsider_cannot_judge(direct_vm, direct_deploy, direct_alice, direct_charlie):
