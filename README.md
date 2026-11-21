@@ -190,10 +190,16 @@ jaringan, hitungan milidetik:
 
 - `test_freelance_escrow.py` — state machine milestone, aturan akses (klien /
   freelancer / orang luar), funding dengan nominal tepat, tiga penolakan sampai
-  `failed`, approval yang merilis dana, dan validator yang menolak leader.
+  `failed`, approval yang mengkreditkan saldo freelancer, refund ke klien, dan
+  validator yang menolak leader.
 - `test_prediction_market.py` — pembuatan pasar, taruhan yes/no (termasuk minimal
   0,01 GEN dan larangan taruhan dua sisi), resolusi dengan halaman + LLM tiruan,
-  `preview_payout`, `void_market` untuk refund, dan validator yang tidak setuju.
+  `preview_payout`, `claim` yang mengkreditkan saldo, `void_market` untuk refund,
+  dan validator yang tidak setuju.
+
+Dua test `withdraw` di-skip: direct mode tidak punya lapisan chain, jadi saldo
+kontrak dan pesan eksternal (`emit_transfer`) tidak disimulasikan. Lompatan
+transfer itu hanya bisa diuji di Studio atau testnet.
 
 Cheatcode yang dipakai: `direct_vm.sender`, `direct_vm.value` (untuk method
 `payable`), `direct_vm.mock_web`, `direct_vm.mock_llm`, `direct_vm.expect_revert`,
